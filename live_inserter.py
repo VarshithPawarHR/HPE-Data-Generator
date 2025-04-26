@@ -10,8 +10,8 @@ from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = os.environ.get("MONGO_URI")
-SELF_PING_URL = os.environ.get("SELF_PING_URL")
+MONGO_URI = "mongodb+srv://bhavyanayak830:hpecppguys@cluster0.k0b3rqz.mongodb.net/"
+SELF_PING_URL = "https://intra-organizational-mental-health-care.onrender.com/helpline"
 
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set. Please set it in Render environment variables.")
