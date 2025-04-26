@@ -2,3 +2,4 @@ pymongo
 pandas
 numpy
 requests
+flask

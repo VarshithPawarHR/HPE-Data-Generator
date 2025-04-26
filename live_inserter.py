@@ -1,11 +1,13 @@
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import requests
 from pymongo import MongoClient
+from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
@@ -138,7 +140,16 @@ def live_data_insertion_loop():
 
         time.sleep(900)  # Sleep for 15 minutes (900 seconds)
 
+# ------------------ Flask App ------------------
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Storage Simulation Service is running!", 200
+
 # ------------------ Entry ------------------
 
 if __name__ == "__main__":
-    live_data_insertion_loop()
+    threading.Thread(target=live_data_insertion_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
