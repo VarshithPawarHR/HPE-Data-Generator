@@ -1,16 +1,22 @@
-# live_inserter.py
-
 import os
 import time
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import requests  # 🆕 For self-ping
 from pymongo import MongoClient
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = os.environ.get["MONGO_URI"]  # Securely load from environment variable
+MONGO_URI = os.getenv("MONGO_URI")
+SELF_PING_URL = os.getenv("SELF_PING_URL")  # 🆕 URL for self-ping
+
+if not MONGO_URI:
+    raise RuntimeError("❌ MONGO_URI not set. Please set it in Render environment variables.")
+if not SELF_PING_URL:
+    raise RuntimeError("❌ SELF_PING_URL not set. Please set your service URL for self-ping.")
+
 client = MongoClient(MONGO_URI)
 db = client["storage_simulation"]
 collection = db["usage_logs"]
@@ -27,13 +33,11 @@ profiles = {
 # ------------------ Utility Functions ------------------
 
 def get_last_timestamp(directory):
-    """Fetch latest timestamp for a directory, or start from April 10, 2025."""
     doc = collection.find({"directory": directory}).sort("timestamp", -1).limit(1)
     latest = next(doc, None)
     return latest["timestamp"] if latest else datetime(2025, 4, 10)
 
 def generate_value(prev_val, cfg):
-    """Generate next storage value with drift, volatility, spike/drop."""
     drift = np.random.normal(cfg["drift"], cfg["drift"] * 0.25)
     change = np.random.normal(0, cfg["volatility"])
     if np.random.rand() < cfg["spike"]:
@@ -45,7 +49,6 @@ def generate_value(prev_val, cfg):
     return new_val, round(max(delta, 0), 2), round(max(-delta, 0), 2), round(abs(delta), 2)
 
 def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
-    """Generate and bulk insert historical data to backfill."""
     timestamps = pd.date_range(start=start_ts, end=end_ts, freq="15min")
     docs = []
     for ts in timestamps:
@@ -64,10 +67,20 @@ def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
         return prev_val, timestamps[-1]
     return prev_val, start_ts - timedelta(minutes=15)
 
+def ping_self():
+    """Send an HTTP request to prevent Render service from sleeping."""
+    try:
+        response = requests.get(SELF_PING_URL, timeout=5)
+        if response.status_code == 200:
+            print(f"🔵 Self-ping success [{datetime.now()}]")
+        else:
+            print(f"🟡 Self-ping failed: status {response.status_code}")
+    except Exception as e:
+        print(f"🔴 Self-ping error: {e}")
+
 # ------------------ Main Insertion Loop ------------------
 
 def live_data_insertion_loop():
-    """Main process: backfill missing data and continue live insertion every 15 min."""
     last_vals = {}
     now = datetime.now().replace(second=0, microsecond=0)
 
@@ -99,6 +112,8 @@ def live_data_insertion_loop():
 
     print("🚀 Entering live mode (insert every 15 min)...")
 
+    next_ping_time = datetime.now() + timedelta(minutes=5)
+
     while True:
         now = datetime.now().replace(second=0, microsecond=0)
         for directory, cfg in profiles.items():
@@ -114,7 +129,14 @@ def live_data_insertion_loop():
             }
             collection.insert_one(doc)
             last_vals[directory] = current
+
         print(f"[{now}] ✅ Inserted live records.")
+
+        # Self-ping if needed
+        if datetime.now() >= next_ping_time:
+            ping_self()
+            next_ping_time = datetime.now() + timedelta(minutes=5)
+
         time.sleep(900)  # Sleep 15 minutes
 
 # ------------------ Entry ------------------
