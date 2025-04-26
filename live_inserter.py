@@ -9,8 +9,8 @@ from pymongo import MongoClient
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = os.getenv("MONGO_URI")
-SELF_PING_URL = os.getenv("SELF_PING_URL")  # 🆕 URL for self-ping
+MONGO_URI = os.environ.get("MONGO_URI")
+SELF_PING_URL = os.environ.get("SELF_PING_URL")  # 🆕 URL for self-ping
 
 if not MONGO_URI:
     raise RuntimeError("❌ MONGO_URI not set. Please set it in Render environment variables.")
