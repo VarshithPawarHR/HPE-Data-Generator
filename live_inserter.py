@@ -60,7 +60,7 @@ def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
     docs = []
     for ts in timestamps:
         ts = ts.to_pydatetime()
-        ts = ts.replace(tzinfo=None)  # 👈 Remove timezone info if present
+        ts = ts.replace(tzinfo=None)  #Remove timezone info if present
         current, added, deleted, updated = generate_value(prev_val, cfg)
         docs.append({
             "timestamp": ts,
