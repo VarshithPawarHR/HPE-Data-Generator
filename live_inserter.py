@@ -1,13 +1,11 @@
 import os
 import time
-import threading
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import requests
 from pymongo import MongoClient
-from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
@@ -74,19 +72,22 @@ def ping_self():
     try:
         response = requests.get(SELF_PING_URL, timeout=5)
         if response.status_code == 200:
-            print(f"Self-ping success [{datetime.now()}]")
+            print(f"[{datetime.now()}] Self-ping success")
         else:
-            print(f"Self-ping failed: status {response.status_code}")
+            print(f"[{datetime.now()}] Self-ping failed: status {response.status_code}")
     except Exception as e:
-        print(f"Self-ping error: {e}")
+        print(f"[{datetime.now()}] Self-ping error: {e}")
 
 # ------------------ Main Insertion Loop ------------------
 
 def live_data_insertion_loop():
+    print("===== SERVICE STARTED =====")
+
     last_vals = {}
     now = datetime.now().replace(second=0, microsecond=0)
+    print(f"Current time: {now}")
 
-    print("Backfilling missing data...")
+    print("Backfilling missing data (if any)...")
     for directory, cfg in profiles.items():
         last_ts = get_last_timestamp(directory)
         prev_val_doc = collection.find_one({"directory": directory, "timestamp": last_ts})
@@ -94,13 +95,15 @@ def live_data_insertion_loop():
 
         start_ts = last_ts + timedelta(minutes=15)
         if start_ts <= now:
+            print(f"Backfilling {directory} from {start_ts} to {now}")
             new_prev_val, _ = generate_and_bulk_insert(directory, cfg, start_ts, now, prev_val)
             last_vals[directory] = new_prev_val
         else:
-            print(f"{directory} already up to date.")
+            print(f"{directory} is already up to date.")
             last_vals[directory] = prev_val
     print("Backfill complete.")
 
+    # Calculate next live insertion slot
     minutes = (now.minute // 15 + 1) * 15
     if minutes == 60:
         next_live_ts = now.replace(minute=0) + timedelta(hours=1)
@@ -108,10 +111,13 @@ def live_data_insertion_loop():
         next_live_ts = now.replace(minute=minutes)
 
     print(f"Waiting until {next_live_ts} to start live mode...")
-    while datetime.now() < next_live_ts:
-        time.sleep(5)
 
-    print("Entering live mode (insert every 15 min)...")
+    # Prevent silent waiting, print heartbeat during sleep
+    while datetime.now() < next_live_ts:
+        print(f"[{datetime.now()}] Waiting for live mode...")
+        time.sleep(30)  # check every 30 sec instead of 5s
+
+    print("===== ENTERING LIVE MODE ===== (inserts every 15 minutes)")
 
     next_ping_time = datetime.now() + timedelta(minutes=5)
 
@@ -131,25 +137,19 @@ def live_data_insertion_loop():
             collection.insert_one(doc)
             last_vals[directory] = current
 
-        print(f"[{now}] Inserted live records.")
+        print(f"[{now}] Inserted live records into MongoDB.")
 
         # Self-ping every 5 minutes
         if datetime.now() >= next_ping_time:
             ping_self()
             next_ping_time = datetime.now() + timedelta(minutes=5)
 
-        time.sleep(900)  # Sleep for 15 minutes (900 seconds)
-
-# ------------------ Flask App ------------------
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Storage Simulation Service is running!", 200
+        # Sleep exactly 15 minutes
+        print(f"[{datetime.now()}] Sleeping for 15 minutes until next live insertion...")
+        time.sleep(900)
 
 # ------------------ Entry ------------------
 
 if __name__ == "__main__":
-    threading.Thread(target=live_data_insertion_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    print("Starting live data insertion script...")
+    live_data_insertion_loop()
