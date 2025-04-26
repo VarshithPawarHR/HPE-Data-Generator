@@ -3,7 +3,7 @@
 import os
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 
 import numpy as np
@@ -11,7 +11,31 @@ import pandas as pd
 import requests
 from pymongo import MongoClient
 from flask import Flask
-from zoneinfo import ZoneInfo  # For proper timezone management (Python 3.9+)
+from zoneinfo import ZoneInfo  # Python 3.9+ for timezone
+
+# ------------------ Timezones ------------------
+
+IST = ZoneInfo("Asia/Kolkata")
+UTC = timezone.utc
+
+def to_utc(dt):
+    """Convert naive or IST datetime to UTC aware datetime."""
+    if dt.tzinfo is None:
+        # Assume naive dt is in IST, localize then convert
+        dt = dt.replace(tzinfo=IST)
+    return dt.astimezone(UTC)
+
+def to_ist(dt):
+    """Convert UTC aware datetime to IST aware datetime."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(IST)
+
+def get_current_ist():
+    return datetime.now(IST).replace(second=0, microsecond=0)
+
+def get_current_utc():
+    return datetime.now(UTC).replace(second=0, microsecond=0)
 
 # ------------------ MongoDB Setup ------------------
 
@@ -19,13 +43,9 @@ MONGO_URI = os.environ.get("MONGO_URI")
 SELF_PING_URL = os.environ.get("SELF_PING_URL")
 
 if not MONGO_URI:
-    raise RuntimeError("MONGO_URI not set. Please set it in Render environment variables.")
+    raise RuntimeError("MONGO_URI not set. Please set it in environment variables.")
 if not SELF_PING_URL:
-    print(f"[{datetime.now()}] WARNING: SELF_PING_URL not set. Self-ping will be disabled.")
-
-# Helper to get current IST time
-def get_current_ist():
-    return datetime.now(ZoneInfo("Asia/Kolkata")).replace(second=0, microsecond=0)
+    print(f"[{get_current_ist()}] WARNING: SELF_PING_URL not set. Self-ping will be disabled.")
 
 print(f"[{get_current_ist()}] Connecting to MongoDB...")
 try:
@@ -37,6 +57,7 @@ try:
 except Exception as e:
     print(f"[{get_current_ist()}] CRITICAL ERROR: MongoDB connection failed: {e}")
     traceback.print_exc()
+    raise e
 
 # ------------------ Storage Profiles ------------------
 
@@ -53,13 +74,22 @@ def get_last_timestamp(directory):
     try:
         doc = collection.find({"directory": directory}).sort("timestamp", -1).limit(1)
         latest = next(doc, None)
-        result = latest["timestamp"] if latest else datetime(2025, 4, 10, tzinfo=ZoneInfo("Asia/Kolkata"))
-        print(f"[{get_current_ist()}] Last timestamp for {directory}: {result}")
-        return result
+        if latest:
+            # Convert stored IST naive timestamp to UTC aware
+            ts = latest["timestamp"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=IST)
+            ts_utc = ts.astimezone(UTC)
+        else:
+            # Default start date localized to IST then converted to UTC
+            ts_utc = datetime(2025, 4, 10, tzinfo=IST).astimezone(UTC)
+        print(f"[{get_current_ist()}] Last timestamp for {directory} (UTC): {ts_utc}")
+        return ts_utc
     except Exception as e:
         print(f"[{get_current_ist()}] ERROR getting last timestamp for {directory}: {e}")
         traceback.print_exc()
-        return datetime(2025, 4, 10, tzinfo=ZoneInfo("Asia/Kolkata"))
+        # fallback default
+        return datetime(2025, 4, 10, tzinfo=IST).astimezone(UTC)
 
 def generate_value(prev_val, cfg):
     try:
@@ -77,19 +107,21 @@ def generate_value(prev_val, cfg):
         traceback.print_exc()
         return prev_val + 0.01, 0.01, 0, 0.01
 
-def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
+def generate_and_bulk_insert(directory, cfg, start_ts_utc, end_ts_utc, prev_val):
     try:
-        print(f"[{get_current_ist()}] Generating data for {directory} from {start_ts} to {end_ts}")
-        timestamps = pd.date_range(start=start_ts, end=end_ts, freq="15min", tz="Asia/Kolkata")
-        if len(timestamps) == 0:
+        # Generate timestamps in IST for realistic intervals, then convert each to UTC
+        timestamps_ist = pd.date_range(start=start_ts_utc.astimezone(IST), end=end_ts_utc.astimezone(IST), freq="15min", tz=IST)
+        if len(timestamps_ist) == 0:
             print(f"[{get_current_ist()}] WARNING: No timestamps generated for {directory}")
-            return prev_val, start_ts - timedelta(minutes=15)
+            return prev_val, start_ts_utc - timedelta(minutes=15)
 
         docs = []
-        for ts in timestamps:
+        for ts_ist in timestamps_ist:
             current, added, deleted, updated = generate_value(prev_val, cfg)
+            # Store timestamps in UTC (aware) in DB
+            ts_utc = ts_ist.astimezone(UTC).replace(tzinfo=None)  # Store naive UTC for MongoDB consistency
             docs.append({
-                "timestamp": ts.to_pydatetime(),  # Convert Timestamp to datetime
+                "timestamp": ts_utc,
                 "directory": directory,
                 "storage_gb": current,
                 "added_gb": added,
@@ -100,15 +132,15 @@ def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
 
         if docs:
             collection.insert_many(docs)
-            print(f"[{get_current_ist()}] Successfully inserted {len(docs)} documents for {directory}")
-            return prev_val, timestamps[-1].to_pydatetime()
+            print(f"[{get_current_ist()}] Inserted {len(docs)} docs for {directory} (UTC timestamps stored)")
+            return prev_val, timestamps_ist[-1].astimezone(UTC)
         else:
             print(f"[{get_current_ist()}] No documents to insert for {directory}")
-            return prev_val, start_ts - timedelta(minutes=15)
+            return prev_val, start_ts_utc - timedelta(minutes=15)
     except Exception as e:
         print(f"[{get_current_ist()}] ERROR in bulk insert for {directory}: {e}")
         traceback.print_exc()
-        return prev_val, start_ts - timedelta(minutes=15)
+        return prev_val, start_ts_utc - timedelta(minutes=15)
 
 def ping_self():
     if not SELF_PING_URL:
@@ -134,19 +166,21 @@ def live_data_insertion_loop():
     except:
         pass
 
-    now = get_current_ist()
-    print(f"[{get_current_ist()}] Current server time (IST): {now}")
+    now_ist = get_current_ist()
+    now_utc = now_ist.astimezone(UTC)
+    print(f"[{now_ist}] Current server time (IST), UTC: {now_utc}")
 
-    # Backfilling
+    # Backfilling phase
     for directory, cfg in profiles.items():
         try:
-            last_ts = get_last_timestamp(directory)
-            prev_val_doc = collection.find_one({"directory": directory, "timestamp": last_ts})
+            last_ts_utc = get_last_timestamp(directory)
+            # Find previous storage value at last_ts (stored as naive UTC in DB)
+            prev_val_doc = collection.find_one({"directory": directory, "timestamp": last_ts_utc.replace(tzinfo=None)})
             prev_val = prev_val_doc["storage_gb"] if prev_val_doc else cfg["base"]
 
-            start_ts = last_ts + timedelta(minutes=15)
-            if start_ts <= now:
-                new_prev_val, last_timestamp = generate_and_bulk_insert(directory, cfg, start_ts, now, prev_val)
+            start_ts_utc = last_ts_utc + timedelta(minutes=15)
+            if start_ts_utc <= now_utc:
+                new_prev_val, last_timestamp = generate_and_bulk_insert(directory, cfg, start_ts_utc, now_utc, prev_val)
                 last_vals[directory] = new_prev_val
             else:
                 last_vals[directory] = prev_val
@@ -154,28 +188,31 @@ def live_data_insertion_loop():
             traceback.print_exc()
             last_vals[directory] = cfg["base"]
 
-    # Wait until next 15-minute mark
-    now = get_current_ist()
-    minutes = (now.minute // 15 + 1) * 15
+    # Wait until next 15-minute mark in IST
+    now_ist = get_current_ist()
+    minutes = (now_ist.minute // 15 + 1) * 15
     if minutes == 60:
-        next_live_ts = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        next_live_ts_ist = now_ist.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     else:
-        next_live_ts = now.replace(minute=minutes, second=0, microsecond=0)
+        next_live_ts_ist = now_ist.replace(minute=minutes, second=0, microsecond=0)
 
-    while get_current_ist() < next_live_ts:
+    while get_current_ist() < next_live_ts_ist:
         time.sleep(5)
 
     print(f"[{get_current_ist()}] ===== ENTERING LIVE MODE =====")
     next_ping_time = get_current_ist() + timedelta(minutes=5)
 
     while True:
-        now = get_current_ist()
+        now_ist = get_current_ist()
+        now_utc = now_ist.astimezone(UTC)
         for directory, cfg in profiles.items():
             try:
                 prev_val = last_vals[directory]
                 current, added, deleted, updated = generate_value(prev_val, cfg)
+                # Store timestamps in UTC naive format
+                ts_to_store = now_utc.replace(tzinfo=None)
                 collection.insert_one({
-                    "timestamp": now,
+                    "timestamp": ts_to_store,
                     "directory": directory,
                     "storage_gb": current,
                     "added_gb": added,
@@ -190,11 +227,10 @@ def live_data_insertion_loop():
             threading.Thread(target=ping_self, daemon=True).start()
             next_ping_time = get_current_ist() + timedelta(minutes=5)
 
-        next_slot = now + timedelta(minutes=15)
+        next_slot = now_ist + timedelta(minutes=15)
         sleep_time = (next_slot - get_current_ist()).total_seconds()
         if sleep_time <= 0:
             sleep_time = 15 * 60
-
         time.sleep(sleep_time)
 
 # ------------------ Flask App Setup ------------------
