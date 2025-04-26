@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import requests
 from pymongo import MongoClient
+from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
@@ -33,11 +34,13 @@ profiles = {
 # ------------------ Utility Functions ------------------
 
 def get_last_timestamp(directory):
+    """Get the last timestamp inserted for a given directory."""
     doc = collection.find({"directory": directory}).sort("timestamp", -1).limit(1)
     latest = next(doc, None)
     return latest["timestamp"] if latest else datetime(2025, 4, 10)
 
 def generate_value(prev_val, cfg):
+    """Generate a new storage value based on previous value and storage profile."""
     drift = np.random.normal(cfg["drift"], cfg["drift"] * 0.25)
     change = np.random.normal(0, cfg["volatility"])
     if np.random.rand() < cfg["spike"]:
@@ -49,6 +52,7 @@ def generate_value(prev_val, cfg):
     return new_val, round(max(delta, 0), 2), round(max(-delta, 0), 2), round(abs(delta), 2)
 
 def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
+    """Generate missing historical records and bulk insert them into MongoDB."""
     timestamps = pd.date_range(start=start_ts, end=end_ts, freq="15min")
     docs = []
     for ts in timestamps:
@@ -115,7 +119,7 @@ def live_data_insertion_loop():
     # Prevent silent waiting, print heartbeat during sleep
     while datetime.now() < next_live_ts:
         print(f"[{datetime.now()}] Waiting for live mode...")
-        time.sleep(30)  # check every 30 sec instead of 5s
+        time.sleep(30)
 
     print("===== ENTERING LIVE MODE ===== (inserts every 15 minutes)")
 
@@ -148,8 +152,22 @@ def live_data_insertion_loop():
         print(f"[{datetime.now()}] Sleeping for 15 minutes until next live insertion...")
         time.sleep(900)
 
+# ------------------ Flask App Setup (for Port Binding) ------------------
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Storage simulation service is running."
+
 # ------------------ Entry ------------------
 
 if __name__ == "__main__":
-    print("Starting live data insertion script...")
-    live_data_insertion_loop()
+    import threading
+
+    # Run live data insertion in a separate thread
+    threading.Thread(target=live_data_insertion_loop, daemon=True).start()
+
+    # Start Flask app to keep service alive (important for Render / deployments)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
