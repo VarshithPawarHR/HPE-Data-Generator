@@ -131,11 +131,12 @@ def live_data_insertion_loop():
 
         print(f"[{now}] Inserted live records.")
 
+        # Self-ping every 5 minutes
         if datetime.now() >= next_ping_time:
             ping_self()
             next_ping_time = datetime.now() + timedelta(minutes=5)
 
-        time.sleep(900)
+        time.sleep(900)  # Sleep for 15 minutes (900 seconds)
 
 # ------------------ Entry ------------------
 
