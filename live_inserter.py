@@ -10,7 +10,7 @@ from pymongo import MongoClient
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = os.environ["MONGO_URI"]  # Securely load from environment variable
+MONGO_URI = os.environ.get["MONGO_URI"]  # Securely load from environment variable
 client = MongoClient(MONGO_URI)
 db = client["storage_simulation"]
 collection = db["usage_logs"]
