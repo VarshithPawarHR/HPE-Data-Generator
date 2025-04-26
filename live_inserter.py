@@ -14,13 +14,13 @@ from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = "mongodb+srv://bhavyanayak830:hpecppguys@cluster0.k0b3rqz.mongodb.net/"
-SELF_PING_URL = "https://intra-organizational-mental-health-care.onrender.com/helpline"
+MONGO_URI = os.environ.get("MONGO_URI")
+SELF_PING_URL = os.environ.get("SELF_PING_URL")
 
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set. Please set it in Render environment variables.")
 if not SELF_PING_URL:
-    raise RuntimeError("SELF_PING_URL not set. Please set your service URL for self-ping.")
+    print(f"[{datetime.now()}] WARNING: SELF_PING_URL not set. Self-ping will be disabled.")
 
 print(f"[{datetime.now()}] Connecting to MongoDB...")
 try:
@@ -110,6 +110,10 @@ def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
         return prev_val, start_ts - timedelta(minutes=15)
 
 def ping_self():
+    if not SELF_PING_URL:
+        print(f"[{datetime.now()}] Self-ping skipped: URL not configured.")
+        return True
+        
     try:
         print(f"[{datetime.now()}] Attempting self-ping at {SELF_PING_URL}")
         response = requests.get(SELF_PING_URL, timeout=5)
@@ -118,7 +122,8 @@ def ping_self():
     except Exception as e:
         print(f"[{datetime.now()}] Self-ping error: {e}")
         traceback.print_exc()
-        return False
+        # Return True anyway to prevent this from blocking execution
+        return True
 
 # ------------------ Main Insertion Logic ------------------
 
@@ -126,10 +131,22 @@ def live_data_insertion_loop():
     print(f"[{datetime.now()}] ===== SERVICE STARTED =====")
     last_vals = {}
 
-    # First ping to check connectivity
-    print(f"[{datetime.now()}] Testing self-ping functionality...")
-    ping_self()
-
+    # First ping to check connectivity, but don't block on failure
+    try:
+        print(f"[{datetime.now()}] Testing self-ping functionality...")
+        ping_thread = threading.Thread(target=ping_self)
+        ping_thread.daemon = True
+        ping_thread.start()
+        # Set a timeout for the self-ping thread
+        ping_thread.join(timeout=10)
+        if ping_thread.is_alive():
+            print(f"[{datetime.now()}] WARNING: Self-ping timed out after 10 seconds. Continuing anyway.")
+    except Exception as e:
+        print(f"[{datetime.now()}] ERROR during self-ping test: {e}")
+        traceback.print_exc()
+        # Continue execution regardless of self-ping results
+    
+    print(f"[{datetime.now()}] Proceeding with normal execution.")
     now = datetime.now().replace(second=0, microsecond=0)
     print(f"[{datetime.now()}] Current server time: {now}")
 
@@ -205,9 +222,11 @@ def live_data_insertion_loop():
 
                 print(f"[{datetime.now()}] Inserted new live records.")
 
-                # Self-ping every 5 mins
+                # Self-ping every 5 mins in a non-blocking way
                 if datetime.now() >= next_ping_time:
-                    ping_self()
+                    ping_thread = threading.Thread(target=ping_self)
+                    ping_thread.daemon = True
+                    ping_thread.start()
                     next_ping_time = datetime.now() + timedelta(minutes=5)
 
                 # Sleep until next 15-minute mark
@@ -244,10 +263,18 @@ def status():
     except Exception as e:
         return f"Service is running but MongoDB connection is failing: {str(e)}", 500
 
+@app.route('/helpline')
+def helpline():
+    """Endpoint for self-ping to call"""
+    return "OK", 200
+
 # ------------------ Entry Point ------------------
 
 if __name__ == "__main__":
-    threading.Thread(target=live_data_insertion_loop, daemon=True).start()
+    # Start data insertion thread
+    insertion_thread = threading.Thread(target=live_data_insertion_loop, daemon=True)
+    insertion_thread.start()
 
+    # Start Flask app
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
