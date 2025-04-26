@@ -3,4 +3,3 @@ pandas
 numpy
 requests
 flask
-zoneinfo
