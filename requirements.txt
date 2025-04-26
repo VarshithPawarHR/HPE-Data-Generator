@@ -1,5 +1,7 @@
+fastapi
+uvicorn
 pymongo
 pandas
 numpy
-requests
-flask
+python-dotenv
+pytz 
