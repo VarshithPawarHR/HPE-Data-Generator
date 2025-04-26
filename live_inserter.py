@@ -4,18 +4,18 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
-import requests  # 🆕 For self-ping
+import requests
 from pymongo import MongoClient
 
 # ------------------ MongoDB Setup ------------------
 
 MONGO_URI = os.environ.get("MONGO_URI")
-SELF_PING_URL = os.environ.get("SELF_PING_URL")  # 🆕 URL for self-ping
+SELF_PING_URL = os.environ.get("SELF_PING_URL")
 
 if not MONGO_URI:
-    raise RuntimeError("❌ MONGO_URI not set. Please set it in Render environment variables.")
+    raise RuntimeError("MONGO_URI not set. Please set it in Render environment variables.")
 if not SELF_PING_URL:
-    raise RuntimeError("❌ SELF_PING_URL not set. Please set your service URL for self-ping.")
+    raise RuntimeError("SELF_PING_URL not set. Please set your service URL for self-ping.")
 
 client = MongoClient(MONGO_URI)
 db = client["storage_simulation"]
@@ -72,11 +72,11 @@ def ping_self():
     try:
         response = requests.get(SELF_PING_URL, timeout=5)
         if response.status_code == 200:
-            print(f"🔵 Self-ping success [{datetime.now()}]")
+            print(f"Self-ping success [{datetime.now()}]")
         else:
-            print(f"🟡 Self-ping failed: status {response.status_code}")
+            print(f"Self-ping failed: status {response.status_code}")
     except Exception as e:
-        print(f"🔴 Self-ping error: {e}")
+        print(f"Self-ping error: {e}")
 
 # ------------------ Main Insertion Loop ------------------
 
@@ -84,7 +84,7 @@ def live_data_insertion_loop():
     last_vals = {}
     now = datetime.now().replace(second=0, microsecond=0)
 
-    print("🔁 Backfilling missing data...")
+    print("Backfilling missing data...")
     for directory, cfg in profiles.items():
         last_ts = get_last_timestamp(directory)
         prev_val_doc = collection.find_one({"directory": directory, "timestamp": last_ts})
@@ -95,22 +95,21 @@ def live_data_insertion_loop():
             new_prev_val, _ = generate_and_bulk_insert(directory, cfg, start_ts, now, prev_val)
             last_vals[directory] = new_prev_val
         else:
-            print(f"🟡 {directory} already up to date.")
+            print(f"{directory} already up to date.")
             last_vals[directory] = prev_val
-    print("✅ Backfill complete.")
+    print("Backfill complete.")
 
-    # Wait until next 15-min slot
     minutes = (now.minute // 15 + 1) * 15
     if minutes == 60:
         next_live_ts = now.replace(minute=0) + timedelta(hours=1)
     else:
         next_live_ts = now.replace(minute=minutes)
 
-    print(f"🕒 Waiting until {next_live_ts} to start live mode...")
+    print(f"Waiting until {next_live_ts} to start live mode...")
     while datetime.now() < next_live_ts:
         time.sleep(5)
 
-    print("🚀 Entering live mode (insert every 15 min)...")
+    print("Entering live mode (insert every 15 min)...")
 
     next_ping_time = datetime.now() + timedelta(minutes=5)
 
@@ -130,14 +129,13 @@ def live_data_insertion_loop():
             collection.insert_one(doc)
             last_vals[directory] = current
 
-        print(f"[{now}] ✅ Inserted live records.")
+        print(f"[{now}] Inserted live records.")
 
-        # Self-ping if needed
         if datetime.now() >= next_ping_time:
             ping_self()
             next_ping_time = datetime.now() + timedelta(minutes=5)
 
-        time.sleep(900)  # Sleep 15 minutes
+        time.sleep(900)
 
 # ------------------ Entry ------------------
 
