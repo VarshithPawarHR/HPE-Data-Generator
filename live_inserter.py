@@ -1,5 +1,8 @@
+# live_inserter.py
+
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -10,8 +13,8 @@ from flask import Flask
 
 # ------------------ MongoDB Setup ------------------
 
-MONGO_URI = "mongodb+srv://bhavyanayak830:hpecppguys@cluster0.k0b3rqz.mongodb.net/"
-SELF_PING_URL = "https://intra-organizational-mental-health-care.onrender.com/helpline"
+MONGO_URI = os.environ.get("MONGO_URI")
+SELF_PING_URL = os.environ.get("SELF_PING_URL")
 
 if not MONGO_URI:
     raise RuntimeError("MONGO_URI not set. Please set it in Render environment variables.")
@@ -34,13 +37,11 @@ profiles = {
 # ------------------ Utility Functions ------------------
 
 def get_last_timestamp(directory):
-    """Get the last timestamp inserted for a given directory."""
     doc = collection.find({"directory": directory}).sort("timestamp", -1).limit(1)
     latest = next(doc, None)
     return latest["timestamp"] if latest else datetime(2025, 4, 10)
 
 def generate_value(prev_val, cfg):
-    """Generate a new storage value based on previous value and storage profile."""
     drift = np.random.normal(cfg["drift"], cfg["drift"] * 0.25)
     change = np.random.normal(0, cfg["volatility"])
     if np.random.rand() < cfg["spike"]:
@@ -52,7 +53,6 @@ def generate_value(prev_val, cfg):
     return new_val, round(max(delta, 0), 2), round(max(-delta, 0), 2), round(abs(delta), 2)
 
 def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
-    """Generate missing historical records and bulk insert them into MongoDB."""
     timestamps = pd.date_range(start=start_ts, end=end_ts, freq="15min")
     docs = []
     for ts in timestamps:
@@ -72,26 +72,22 @@ def generate_and_bulk_insert(directory, cfg, start_ts, end_ts, prev_val):
     return prev_val, start_ts - timedelta(minutes=15)
 
 def ping_self():
-    """Send an HTTP request to prevent Render service from sleeping."""
     try:
         response = requests.get(SELF_PING_URL, timeout=5)
-        if response.status_code == 200:
-            print(f"[{datetime.now()}] Self-ping success")
-        else:
-            print(f"[{datetime.now()}] Self-ping failed: status {response.status_code}")
+        print(f"[{datetime.now()}] Self-ping {'success' if response.status_code == 200 else 'fail'}")
     except Exception as e:
         print(f"[{datetime.now()}] Self-ping error: {e}")
 
-# ------------------ Main Insertion Loop ------------------
+# ------------------ Main Insertion Logic ------------------
 
 def live_data_insertion_loop():
     print("===== SERVICE STARTED =====")
-
     last_vals = {}
-    now = datetime.now().replace(second=0, microsecond=0)
-    print(f"Current time: {now}")
 
-    print("Backfilling missing data (if any)...")
+    now = datetime.now().replace(second=0, microsecond=0)
+    print(f"Current server time: {now}")
+
+    print("Backfilling missing data...")
     for directory, cfg in profiles.items():
         last_ts = get_last_timestamp(directory)
         prev_val_doc = collection.find_one({"directory": directory, "timestamp": last_ts})
@@ -103,26 +99,23 @@ def live_data_insertion_loop():
             new_prev_val, _ = generate_and_bulk_insert(directory, cfg, start_ts, now, prev_val)
             last_vals[directory] = new_prev_val
         else:
-            print(f"{directory} is already up to date.")
+            print(f"{directory} already up to date.")
             last_vals[directory] = prev_val
     print("Backfill complete.")
 
-    # Calculate next live insertion slot
+    # Wait until next 15-min slot
     minutes = (now.minute // 15 + 1) * 15
     if minutes == 60:
         next_live_ts = now.replace(minute=0) + timedelta(hours=1)
     else:
         next_live_ts = now.replace(minute=minutes)
 
-    print(f"Waiting until {next_live_ts} to start live mode...")
+    print(f"Waiting until {next_live_ts} to enter live mode...")
 
-    # Prevent silent waiting, print heartbeat during sleep
     while datetime.now() < next_live_ts:
-        print(f"[{datetime.now()}] Waiting for live mode...")
-        time.sleep(30)
+        time.sleep(5)
 
-    print("===== ENTERING LIVE MODE ===== (inserts every 15 minutes)")
-
+    print("===== ENTERING LIVE MODE =====")
     next_ping_time = datetime.now() + timedelta(minutes=5)
 
     while True:
@@ -130,29 +123,28 @@ def live_data_insertion_loop():
         for directory, cfg in profiles.items():
             prev_val = last_vals[directory]
             current, added, deleted, updated = generate_value(prev_val, cfg)
-            doc = {
+            collection.insert_one({
                 "timestamp": now,
                 "directory": directory,
                 "storage_gb": current,
                 "added_gb": added,
                 "deleted_gb": deleted,
                 "updated_gb": updated
-            }
-            collection.insert_one(doc)
+            })
             last_vals[directory] = current
 
-        print(f"[{now}] Inserted live records into MongoDB.")
+        print(f"[{now}] Inserted new live records.")
 
-        # Self-ping every 5 minutes
+        # Self-ping every 5 mins
         if datetime.now() >= next_ping_time:
             ping_self()
             next_ping_time = datetime.now() + timedelta(minutes=5)
 
-        # Sleep exactly 15 minutes
-        print(f"[{datetime.now()}] Sleeping for 15 minutes until next live insertion...")
+        # Sleep for 15 minutes exactly
+        print(f"[{datetime.now()}] Sleeping for 15 minutes...")
         time.sleep(900)
 
-# ------------------ Flask App Setup (for Port Binding) ------------------
+# ------------------ Flask App Setup ------------------
 
 app = Flask(__name__)
 
@@ -160,14 +152,10 @@ app = Flask(__name__)
 def home():
     return "Storage simulation service is running."
 
-# ------------------ Entry ------------------
+# ------------------ Entry Point ------------------
 
 if __name__ == "__main__":
-    import threading
-
-    # Run live data insertion in a separate thread
     threading.Thread(target=live_data_insertion_loop, daemon=True).start()
 
-    # Start Flask app to keep service alive (important for Render / deployments)
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
