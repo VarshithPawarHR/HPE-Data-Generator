@@ -76,7 +76,7 @@ Example:
    ```bash
    python main.py
    ```
-   It monitors every 5 minutes and logs to MongoDB. Example output:  
+   It monitors every 15 minutes and logs to MongoDB. Example output:  
    ```
    Monitoring started.
    Logged data for /home/pawar/customer: {'timestamp': '2025-06-05T11:08:00.000Z', 'directory': '/home/pawar/customer', 'storage_kb': 1499.11, 'added_kb': 0, 'deleted_kb': 0.89, 'updated_kb': 0.89}
