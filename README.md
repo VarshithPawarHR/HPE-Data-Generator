@@ -1,107 +1,140 @@
-# HPE-Data-Generator
+# Directory Storage Monitoring Script
 
-# 📊 Storage Data Simulator API
+This script (`main.py`) tracks storage usage in directories and saves data to MongoDB. It logs total size, added, deleted, and updated files (in KB) with UTC timestamps (from IST).
 
-A **FastAPI-based** server that **simulates storage usage data** for different directories (`/scratch`, `/projects`, `/customer`, `/info`) and inserts it into a **MongoDB** database at **15-minute intervals**.  
-It supports **backfilling historical data** and **live continuous insertion**.
+## Project Files
 
----
+- `observing/` folder:
+  - `main.py`: The script.
+  - `.env`: Settings file.
+  - `requirements.txt`: List of Python packages.
+  - `.venv/`: Virtual environment (created during setup).
 
-## 🚀 Features
+## IMPORTANT: Folder Location
 
-- **Automatic Backfill**: Fills missing storage data since the last available timestamp.
-- **Live Data Insertion**: Inserts new records every 15 minutes.
-- **Profiles**: Different storage profiles with realistic drift, volatility, spikes, and drops.
-- **Manual Trigger**: API to manually run the data generation.
-- **Lightweight**: Runs in a background thread using FastAPI's lifespan events.
+**The `observing` folder MUST be at the root level, same as the directories you monitor (e.g., `customer`, `data`, `projects`, `results`).**  
+Example:  
+- `/home/pawar/customer`  
+- `/home/pawar/data`  
+- `/home/pawar/projects`  
+- `/home/pawar/results`  
+- `/home/pawar/observing` (place it here!)  
+**Do NOT put `observing` inside another folder like `customer` or `data`. It must be at the same level.**
 
----
+## Before You Start
 
-## 🛠️ Tech Stack
+1. **Python 3.6+**: Install from [python.org](https://www.python.org/downloads/). Check: `python --version`.
+2. **MongoDB**: Use local MongoDB (install [here](https://www.mongodb.com/docs/manual/installation/)) or cloud (e.g., MongoDB Atlas). Ensure it’s running.
+3. **pip**: Python package installer. Check: `pip --version`.
 
-- **FastAPI**: Web server and API framework
-- **MongoDB**: Database to store generated data
-- **Pandas & NumPy**: Data generation and timestamp management
-- **Pymongo**: MongoDB interaction
-- **Dotenv**: Securely load environment variables
-- **Threading**: Background live data generation
+## Setup Steps
 
----
+1. **Go to the `observing` Folder**:
+   ```bash
+   cd observing
+   ```
 
-## 📂 Project Structure
+2. **Create Virtual Environment**:
+   ```bash
+   python -m venv .venv
+   ```
+   Activate it:  
+   - Windows: `.venv\Scripts\activate`  
+   - macOS/Linux: `source .venv/bin/activate`
 
-```
-.
-├── live_inserter.py       # FastAPI app with background data generator
-├── .env          # Environment variables for MongoDB connection
-└── README.md     # Project documentation
-```
+3. **Install Packages**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   This installs `pymongo`, `python-dotenv`, `pytz`.
 
----
+## Settings
 
-## ⚙️ Environment Variables
+1. **Edit `.env` File**:
+   Open `.env` in a text editor. Add these:  
+   ```
+   MONGO_URI=mongodb+srv://<your-username>:<your-password>@<your-cluster>.mongodb.net/?retryWrites=true&w=majority
+   MONGO_DB=test
+   MONGO_COLLECTION=hello
+   MONITOR_DIRS=/home/pawar/customer,/home/pawar/data,/home/pawar/projects,/home/pawar/results
+   ```
+   - `MONGO_URI`: Your MongoDB connection (local: `mongodb://localhost:27017/`; cloud: see above).
+   - `MONGO_DB`: Database name (e.g., `test`).
+   - `MONGO_COLLECTION`: Collection name (e.g., `hello`).
+   - `MONITOR_DIRS`: Directories to monitor (e.g., `/home/pawar/customer,/home/pawar/data`).
 
-Create a `.env` file in your project root with the following variables:
+2. **Check MongoDB**:
+   Ensure MongoDB is running. Test connection with your `MONGO_URI`.
 
-```
-MONGO_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
-DB=your_database_name
-COLLECTION=your_collection_name
-```
+## How to Run
 
----
+1. **Activate Virtual Environment**:
+   - Windows: `.venv\Scripts\activate`  
+   - macOS/Linux: `source .venv/bin/activate`
 
-## 🏃 Getting Started
+2. **Run the Script**:
+   ```bash
+   python main.py
+   ```
+   It monitors every 5 minutes and logs to MongoDB. Example output:  
+   ```
+   Monitoring started.
+   Logged data for /home/pawar/customer: {'timestamp': '2025-06-05T11:08:00.000Z', 'directory': '/home/pawar/customer', 'storage_kb': 1499.11, 'added_kb': 0, 'deleted_kb': 0.89, 'updated_kb': 0.89}
+   ```
 
-### 1. Install Dependencies
+3. **Stop**:
+   Press `Ctrl+C`.
 
-```
-pip install fastapi uvicorn pymongo python-dotenv pandas numpy pytz
-```
+## What It Does
 
----
+- Monitors directories in `MONITOR_DIRS` every 15 minutes.
+- Tracks:
+  - `storage_kb`: Total size (KB).
+  - `added_kb`: New files (KB).
+  - `deleted_kb`: Deleted files (KB).
+  - `updated_kb`: Changed files (KB).
+- Saves to MongoDB (`MONGO_DB`, `MONGO_COLLECTION`).
+- Example data:  
+  ```json
+  {
+      "timestamp": "2025-06-05T11:08:00.000Z",
+      "directory": "/home/pawar/customer",
+      "storage_kb": 1499.11,
+      "added_kb": 0,
+      "deleted_kb": 0.89,
+      "updated_kb": 0.89
+  }
+  ```
+- Timestamps: Converts IST to UTC (e.g., 04:38 PM IST = `2025-06-05T11:08:00.000Z`).
 
-### 2. Run the Server
+## Manage MongoDB Size
 
-```
-python main.py
-```
+- Script adds data every 5 minutes. Database grows over time.
+- To delete old data:
+  - **Auto-Delete (TTL)**: In MongoDB, run:  
+    ```javascript
+    db.hello.createIndex({ "timestamp": 1 }, { expireAfterSeconds: 2592000 })
+    ```
+    This deletes data older than 30 days.
+  - **Manual Delete**: Remove old data:  
+    ```javascript
+    db.hello.deleteMany({ "timestamp": { "$lt": "2025-01-01T00:00:00.000Z" } })
+    ```
 
-Server will start on: `http://localhost:10000`
+## If Something Goes Wrong
 
----
+1. **MongoDB Not Connecting**:
+   - Check `MONGO_URI` in `.env`.
+   - Ensure MongoDB is running.
+   - For cloud MongoDB, whitelist your IP.
 
-## 📡 API Endpoints
+2. **Directory Missing**:
+   - Check `MONITOR_DIRS` paths in `.env`. They must exist.
 
-| Method | Endpoint         | Description                              |
-|:-------|:------------------|:-----------------------------------------|
-| GET    | `/keep-alive`      | Health check endpoint (returns alive)    |
-| HEAD   | `/keep-alive`      | Health check for head requests           |
-| GET    | `/run-cron`        | Manually trigger the data insertion loop |
+3. **Packages Missing**:
+   - Run: `pip install -r requirements.txt`.
 
----
+## Notes
 
-## 🔄 How It Works
-
-- On server startup:
-  - **Backfills** any missing data from the last known timestamp up to the current time.
-  - **Waits** until the next 15-minute mark.
-  - **Begins live insertion**, adding new records every 15 minutes.
-
-- Storage profiles simulate:
-  - Gradual increase (drift)
-  - Random volatility
-  - Occasional spikes (sudden usage)
-  - Occasional drops (data deletion)
-
----
-
-## 🧠 Notes
-
-- Times are generated in **Indian Standard Time (IST)**.
-- Data is inserted with **15-minute frequency**.
-- Bulk inserts are done during backfill; live inserts are per timestamp.
-
-
-
-
+- Keep `.env` safe (it has MongoDB credentials). On Linux: `chmod 600 .env`.
+- To monitor more often, edit `MONITOR_INTERVAL` in `main.py` (default: 300 seconds).

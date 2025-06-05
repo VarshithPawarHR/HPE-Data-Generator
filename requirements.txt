@@ -1,7 +1,3 @@
-fastapi
-uvicorn
 pymongo
-pandas
-numpy
 python-dotenv
-pytz 
+pytz
